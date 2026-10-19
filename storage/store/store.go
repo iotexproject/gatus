@@ -41,6 +41,9 @@ type Store interface {
 	// GetHourlyAverageResponseTimeByKey returns a map of hourly (key) average response time in milliseconds (value) during a time range
 	GetHourlyAverageResponseTimeByKey(key string, from, to time.Time) (map[int64]int, error)
 
+	// GetHourlyUptimeStatisticsByKey returns the uptime statistics (value) of every hour (key, unix seconds) with executions during a time range
+	GetHourlyUptimeStatisticsByKey(key string, from, to time.Time) (map[int64]*endpoint.HourlyUptimeStatistics, error)
+
 	// InsertEndpointResult adds the observed result for the specified endpoint into the store
 	InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Result) error
 

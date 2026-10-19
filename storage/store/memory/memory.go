@@ -189,6 +189,27 @@ func (s *Store) GetHourlyAverageResponseTimeByKey(key string, from, to time.Time
 	return hourlyAverageResponseTimes, nil
 }
 
+// GetHourlyUptimeStatisticsByKey returns the uptime statistics (value) of every hour (key, unix seconds) with executions during a time range
+func (s *Store) GetHourlyUptimeStatisticsByKey(key string, from, to time.Time) (map[int64]*endpoint.HourlyUptimeStatistics, error) {
+	if from.After(to) {
+		return nil, common.ErrInvalidTimeRange
+	}
+	s.RLock()
+	defer s.RUnlock()
+	endpointStatus := s.endpointCache.GetValue(key)
+	if endpointStatus == nil || endpointStatus.(*endpoint.Status).Uptime == nil {
+		return nil, common.ErrEndpointNotFound
+	}
+	hourlyStatistics := make(map[int64]*endpoint.HourlyUptimeStatistics)
+	for current := from.Truncate(time.Hour); !current.After(to); current = current.Add(time.Hour) {
+		if hourlyStats := endpointStatus.(*endpoint.Status).Uptime.HourlyStatistics[current.Unix()]; hourlyStats != nil && hourlyStats.TotalExecutions > 0 {
+			statsCopy := *hourlyStats
+			hourlyStatistics[current.Unix()] = &statsCopy
+		}
+	}
+	return hourlyStatistics, nil
+}
+
 // InsertEndpointResult adds the observed result for the specified endpoint into the store
 func (s *Store) InsertEndpointResult(ep *endpoint.Endpoint, result *endpoint.Result) error {
 	endpointKey := ep.Key()

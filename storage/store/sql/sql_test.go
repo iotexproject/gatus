@@ -9,6 +9,7 @@ import (
 	"github.com/TwiN/gatus/v5/alerting/alert"
 	"github.com/TwiN/gatus/v5/config/endpoint"
 	"github.com/TwiN/gatus/v5/storage"
+	"github.com/TwiN/gatus/v5/storage/store/common"
 	"github.com/TwiN/gatus/v5/storage/store/common/paging"
 )
 
@@ -154,6 +155,30 @@ func TestStore_InsertCleansUpOldUptimeEntriesProperly(t *testing.T) {
 	}
 }
 
+func TestStore_GetHourlyUptimeStatisticsByKey(t *testing.T) {
+	store, _ := NewStore("sqlite", t.TempDir()+"/TestStore_GetHourlyUptimeStatisticsByKey.db", false, storage.DefaultMaximumNumberOfResults, storage.DefaultMaximumNumberOfEvents)
+	defer store.Close()
+	now := time.Now().Truncate(time.Hour)
+	// Three days back is past the upstream 48h hourly buffer, so it must still be an hourly entry
+	store.InsertEndpointResult(&testEndpoint, &endpoint.Result{Timestamp: now.Add(-72 * time.Hour), Success: true, Duration: 100 * time.Millisecond})
+	store.InsertEndpointResult(&testEndpoint, &endpoint.Result{Timestamp: now.Add(-72*time.Hour + time.Minute), Success: false, Duration: 300 * time.Millisecond})
+	store.InsertEndpointResult(&testEndpoint, &endpoint.Result{Timestamp: now.Add(-8 * 24 * time.Hour), Success: true})
+	stats, err := store.GetHourlyUptimeStatisticsByKey(testEndpoint.Key(), time.Now().Add(-7*24*time.Hour), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected only the hour within 7 days, got %d entries", len(stats))
+	}
+	hour := stats[now.Add(-72*time.Hour).Unix()]
+	if hour == nil || hour.TotalExecutions != 2 || hour.SuccessfulExecutions != 1 || hour.TotalExecutionsResponseTime != 400 {
+		t.Errorf("unexpected hourly statistics: %+v", hour)
+	}
+	if _, err := store.GetHourlyUptimeStatisticsByKey("nope", time.Now().Add(-time.Hour), time.Now()); !errors.Is(err, common.ErrEndpointNotFound) {
+		t.Errorf("expected ErrEndpointNotFound, got %v", err)
+	}
+}
+
 func TestStore_HourlyUptimeEntriesAreMergedIntoDailyUptimeEntriesProperly(t *testing.T) {
 	store, _ := NewStore("sqlite", t.TempDir()+"/TestStore_HourlyUptimeEntriesAreMergedIntoDailyUptimeEntriesProperly.db", false, storage.DefaultMaximumNumberOfResults, storage.DefaultMaximumNumberOfEvents)
 	defer store.Close()
@@ -169,10 +194,11 @@ func TestStore_HourlyUptimeEntriesAreMergedIntoDailyUptimeEntriesProperly(t *tes
 		{numberOfHours: 50, expectedMaxUptimeEntries: 50},
 		{numberOfHours: 75, expectedMaxUptimeEntries: 75},
 		{numberOfHours: 99, expectedMaxUptimeEntries: 99},
-		{numberOfHours: 150, expectedMaxUptimeEntries: 100},
-		{numberOfHours: 300, expectedMaxUptimeEntries: 100},
-		{numberOfHours: 768, expectedMaxUptimeEntries: 100}, // 32 days (in hours), which means anything beyond that won't be persisted anyway
-		{numberOfHours: 1000, expectedMaxUptimeEntries: 100},
+		// Hourly entries are kept for the whole uptimeRetention, so only the age cleanup bounds them
+		{numberOfHours: 150, expectedMaxUptimeEntries: 150},
+		{numberOfHours: 300, expectedMaxUptimeEntries: 300},
+		{numberOfHours: 768, expectedMaxUptimeEntries: 768}, // 32 days (in hours), which means anything beyond that won't be persisted anyway
+		{numberOfHours: 1000, expectedMaxUptimeEntries: uptimeTotalEntriesMergeThreshold},
 	}
 	// Note that is not technically an accurate real world representation, because uptime entries are always added in
 	// the present, while this test is inserting results from the past to simulate long term uptime entries.
@@ -216,7 +242,7 @@ func TestStore_getEndpointUptime(t *testing.T) {
 	defer store.Clear()
 	defer store.Close()
 	// Add 768 hourly entries (32 days)
-	// Daily entries should be merged from hourly entries automatically
+	// Hourly entries are kept for the whole retention instead of being merged into daily entries
 	for i := 768; i > 0; i-- {
 		err := store.InsertEndpointResult(&testEndpoint, &endpoint.Result{Timestamp: time.Now().Add(-time.Duration(i) * time.Hour), Duration: time.Second, Success: true})
 		if err != nil {
@@ -229,8 +255,8 @@ func TestStore_getEndpointUptime(t *testing.T) {
 	if err != nil {
 		t.Log(err)
 	}
-	if numberOfUptimeEntriesForEndpoint < 20 || numberOfUptimeEntriesForEndpoint > 200 {
-		t.Errorf("expected number of uptime entries to be between 20 and 200, got %d", numberOfUptimeEntriesForEndpoint)
+	if numberOfUptimeEntriesForEndpoint < 700 || numberOfUptimeEntriesForEndpoint > uptimeTotalEntriesMergeThreshold {
+		t.Errorf("expected number of uptime entries to be between 700 and %d, got %d", uptimeTotalEntriesMergeThreshold, numberOfUptimeEntriesForEndpoint)
 	}
 	// Retrieve uptime for the past 30d
 	uptime, avgResponseTime, err := store.getEndpointUptime(tx, 1, time.Now().Add(-(30 * 24 * time.Hour)), time.Now())

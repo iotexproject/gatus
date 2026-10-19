@@ -33,7 +33,7 @@
             <div class="flex-1"></div>
             <p class="text-xs text-muted-foreground" :title="showAverageResponseTime ? 'Average response time' : 'Minimum and maximum response time'">{{ formattedResponseTime }}</p>
           </div>
-          <div class="flex gap-0.5">
+          <div :class="['flex', displayResults.length > 100 ? 'gap-px' : 'gap-0.5']">
             <div
               v-for="(result, index) in displayResults"
               :key="index"
@@ -87,10 +87,13 @@ const props = defineProps({
 
 const emit = defineEmits(['showTooltip'])
 
+const MAX_BARS = 200
+
 // Track selected data point
 const selectedResultIndex = ref(null)
 
 const latestResult = computed(() => {
+  if (props.endpoint.latestResult) return props.endpoint.latestResult
   if (!props.endpoint.results || props.endpoint.results.length === 0) {
     return null
   }
@@ -111,7 +114,30 @@ const displayResults = computed(() => {
   while (results.length < props.maxResults) {
     results.unshift(null)
   }
-  return results.slice(-props.maxResults)
+  const padded = results.slice(-props.maxResults)
+  if (padded.length <= MAX_BARS) return padded
+  // Too many bars to see/hover: merge consecutive results into at most MAX_BARS buckets
+  const size = Math.ceil(padded.length / MAX_BARS)
+  const buckets = []
+  for (let i = 0; i < padded.length; i += size) {
+    const chunk = padded.slice(i, i + size).filter(Boolean)
+    if (chunk.length === 0) {
+      buckets.push(null)
+      continue
+    }
+    // Items may already be buckets (hourly statistics), so weight them by their number of checks
+    const count = chunk.reduce((sum, r) => sum + (r.bucket?.count ?? 1), 0)
+    const failures = chunk.reduce((sum, r) => sum + (r.bucket?.failures ?? (r.success ? 0 : 1)), 0)
+    // Show a failed result's details if any, so failures are never hidden by the merge
+    const representative = chunk.find((r) => !r.success) || chunk[chunk.length - 1]
+    buckets.push({
+      ...representative,
+      success: failures === 0,
+      duration: chunk.reduce((sum, r) => sum + (r.duration || 0) * (r.bucket?.count ?? 1), 0) / count,
+      bucket: { count, failures, from: chunk[0].bucket?.from ?? chunk[0].timestamp, to: chunk[chunk.length - 1].bucket?.to ?? chunk[chunk.length - 1].timestamp }
+    })
+  }
+  return buckets
 })
 
 const formattedResponseTime = computed(() => {
@@ -159,7 +185,8 @@ const oldestResultTime = computed(() => {
 
 const newestResultTime = computed(() => {
   if (!props.endpoint.results || props.endpoint.results.length === 0) return ''
-  return generatePrettyTimeAgo(props.endpoint.results[props.endpoint.results.length - 1].timestamp)
+  const newest = props.endpoint.results[props.endpoint.results.length - 1]
+  return generatePrettyTimeAgo(newest.bucket?.to ?? newest.timestamp)
 })
 
 const navigateToDetails = () => {

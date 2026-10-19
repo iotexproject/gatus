@@ -20,9 +20,13 @@ jobs:
         uses: docker/setup-buildx-action@v4
       - name: Get image repository
         run: |
-          echo DOCKER_IMAGE_REPOSITORY=$(echo ${{ secrets.DOCKER_USERNAME }}/${{ github.event.repository.name }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
-          echo GHCR_IMAGE_REPOSITORY=$(echo ghcr.io/${{ github.actor }}/${{ github.event.repository.name }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+          # Docker Hub is optional: only published when DOCKER_USERNAME secret is set
+          if [ -n "${{ secrets.DOCKER_USERNAME }}" ]; then
+            echo DOCKER_IMAGE_REPOSITORY=$(echo ${{ secrets.DOCKER_USERNAME }}/${{ github.event.repository.name }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+          fi
+          echo GHCR_IMAGE_REPOSITORY=$(echo ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
       - name: Login to Docker Registry
+        if: env.DOCKER_IMAGE_REPOSITORY != ''
         uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -45,7 +49,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
         with:
-          platforms: linux/amd64,linux/arm/v7,linux/arm64
+          platforms: linux/amd64
           pull: true
           push: true
           tags: ${{ steps.meta.outputs.tags }}

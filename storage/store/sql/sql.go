@@ -33,10 +33,10 @@ const (
 	eventsAboveMaximumCleanUpThreshold  = 10 // Maximum number of events above the configured maximum before triggering a cleanup
 	resultsAboveMaximumCleanUpThreshold = 10 // Maximum number of results above the configured maximum before triggering a cleanup
 
-	uptimeTotalEntriesMergeThreshold = 100                 // Maximum number of uptime entries before triggering a merge
+	uptimeTotalEntriesMergeThreshold = 800                 // Maximum number of uptime entries before triggering a merge; above the ~768 hourly entries kept by uptimeHourlyBuffer
 	uptimeAgeCleanUpThreshold        = 32 * 24 * time.Hour // Maximum uptime age before triggering a cleanup
 	uptimeRetention                  = 30 * 24 * time.Hour // Minimum duration that must be kept to operate as intended
-	uptimeHourlyBuffer               = 48 * time.Hour      // Number of hours to buffer from now when determining which hourly uptime entries can be merged into daily uptime entries
+	uptimeHourlyBuffer               = uptimeRetention     // Number of hours to buffer from now when determining which hourly uptime entries can be merged into daily uptime entries; kept for the whole retention so 7d/30d status bars stay hourly
 
 	cacheTTL = 10 * time.Minute
 )
@@ -233,6 +233,49 @@ func (s *Store) GetHourlyAverageResponseTimeByKey(key string, from, to time.Time
 		_ = tx.Rollback()
 	}
 	return hourlyAverageResponseTimes, nil
+}
+
+// GetHourlyUptimeStatisticsByKey returns the uptime statistics (value) of every hour (key, unix seconds) with executions during a time range
+func (s *Store) GetHourlyUptimeStatisticsByKey(key string, from, to time.Time) (map[int64]*endpoint.HourlyUptimeStatistics, error) {
+	if from.After(to) {
+		return nil, common.ErrInvalidTimeRange
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	endpointID, _, _, err := s.getEndpointIDGroupAndNameByKey(tx, key)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(
+		`
+			SELECT hour_unix_timestamp, total_executions, successful_executions, total_response_time
+			FROM endpoint_uptimes
+			WHERE endpoint_id = $1
+				AND total_executions > 0
+				AND hour_unix_timestamp >= $2
+				AND hour_unix_timestamp <= $3
+		`,
+		endpointID,
+		from.Truncate(time.Hour).Unix(),
+		to.Unix(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	hourlyStatistics := make(map[int64]*endpoint.HourlyUptimeStatistics)
+	for rows.Next() {
+		var hourUnixTimestamp int64
+		stats := &endpoint.HourlyUptimeStatistics{}
+		if err = rows.Scan(&hourUnixTimestamp, &stats.TotalExecutions, &stats.SuccessfulExecutions, &stats.TotalExecutionsResponseTime); err != nil {
+			return nil, err
+		}
+		hourlyStatistics[hourUnixTimestamp] = stats
+	}
+	return hourlyStatistics, rows.Err()
 }
 
 // InsertEndpointResult adds the observed result for the specified endpoint into the store

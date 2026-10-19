@@ -75,6 +75,21 @@ func TestRawDataEndpoint(t *testing.T) {
 			ExpectedCode: http.StatusNotFound,
 		},
 		{
+			Name:         "uptime-history-7d",
+			Path:         "/api/v1/endpoints/core_frontend/uptimes/7d/history",
+			ExpectedCode: http.StatusOK,
+		},
+		{
+			Name:         "uptime-history-with-invalid-duration",
+			Path:         "/api/v1/endpoints/core_frontend/uptimes/24h/history",
+			ExpectedCode: http.StatusBadRequest,
+		},
+		{
+			Name:         "uptime-history-for-invalid-key",
+			Path:         "/api/v1/endpoints/invalid_key/uptimes/30d/history",
+			ExpectedCode: http.StatusNotFound,
+		},
+		{
 			Name:         "raw-response-times-1h",
 			Path:         "/api/v1/endpoints/core_frontend/response-times/1h",
 			ExpectedCode: http.StatusOK,
